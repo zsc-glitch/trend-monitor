@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "name_for_human": "Trend Monitor",
+  "description_for_human": "追踪关键词热度、监控竞争对手、发现行业机会",
+  "keywords": ["trend", "monitor", "keyword", "tracker", "market research"],
+  "version": "1.0.0",
+  "npm_package": "@zsc-glitch/trend-monitor"
+}
