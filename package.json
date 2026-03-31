@@ -1,6 +1,6 @@
 {
   "name": "@zsc-glitch/trend-monitor",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "追踪关键词热度、监控竞争对手、发现行业机会 - OpenClaw Plugin",
   "main": "dist/index.js",
