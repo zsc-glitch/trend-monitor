@@ -1,15 +1,26 @@
 {
   "name": "@zsc-glitch/trend-monitor",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "追踪关键词热度、监控竞争对手、发现行业机会 - OpenClaw Plugin",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
+    "bundle": "node build.mjs",
     "prepublish": "npm run build"
   },
-  "keywords": ["openclaw", "openclaw-plugin", "trend", "monitor", "keyword", "tracker"],
+  "openclaw": {
+    "extensions": ["./dist/plugin.bundle.js"]
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "trend",
+    "monitor",
+    "keyword",
+    "tracker"
+  ],
   "author": "zsc-glitch",
   "license": "MIT",
   "peerDependencies": {
@@ -17,6 +28,7 @@
   },
   "devDependencies": {
     "@sinclair/typebox": "^0.34.0",
+    "esbuild": "^0.28.0",
     "typescript": "^5.0.0"
   },
   "publishConfig": {

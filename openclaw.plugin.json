@@ -1,8 +1,24 @@
 {
-  "schema_version": 1,
-  "name_for_human": "Trend Monitor",
-  "description_for_human": "追踪关键词热度、监控竞争对手、发现行业机会",
-  "keywords": ["trend", "monitor", "keyword", "tracker", "market research"],
-  "version": "1.0.0",
-  "npm_package": "@zsc-glitch/trend-monitor"
+  "id": "trend-monitor",
+  "name": "Trend Monitor",
+  "description": "追踪关键词热度、监控竞争对手、发现行业机会",
+  "version": "1.0.2",
+  "author": "zsc-glitch",
+  "homepage": "https://github.com/zsc-glitch/trend-monitor",
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "dataDir": {
+        "type": "string",
+        "description": "数据存储目录",
+        "default": "~/.trend-monitor"
+      },
+      "refreshInterval": {
+        "type": "number",
+        "description": "自动刷新间隔（分钟）",
+        "default": 360
+      }
+    },
+    "additionalProperties": false
+  }
 }

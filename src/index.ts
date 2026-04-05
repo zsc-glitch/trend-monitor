@@ -46,7 +46,7 @@ async function ensureDir(dir: string): Promise<void> {
 
 // 生成 ID
 function generateId(): string {
-  return `alert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  return `alert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 // 获取文件路径
@@ -68,26 +68,51 @@ async function readJson<T>(filepath: string, defaultValue: T): Promise<T> {
   }
 }
 
-// 保存 JSON
+// 保存 JSON（原子写入：先写临时文件再 rename，防止崩溃损坏数据）
 async function writeJson(filepath: string, data: unknown): Promise<void> {
-  await fs.writeFile(filepath, JSON.stringify(data, null, 2), "utf-8");
+  const tmp = filepath + ".tmp";
+  await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf-8");
+  await fs.rename(tmp, filepath);
 }
 
-// 搜索关键词（简单模拟，实际生产应接入真实搜索API）
+// 搜索关键词（GitHub API，支持限速重试）
 async function searchKeyword(keyword: string): Promise<Alert[]> {
-  // 这里是模拟数据，实际使用时应该接入 Google/Baidu API 或爬虫
-  const mockAlerts: Alert[] = [
-    {
-      id: generateId(),
-      keyword,
-      title: `关于「${keyword}」的最新动态`,
-      url: `https://example.com/search?q=${encodeURIComponent(keyword)}`,
-      source: "搜索引擎",
-      timestamp: new Date().toISOString(),
-      snippet: `检测到「${keyword}」的相关最新资讯和讨论...`,
-    },
-  ];
-  return mockAlerts;
+  const MAX_RETRIES = 2;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(keyword)}&sort=stars&per_page=3`;
+      const response = await fetch(url, {
+        headers: { "User-Agent": "trend-monitor-plugin/1.0" },
+      });
+      if (response.status === 403 || response.status === 429) {
+        const retryAfter = response.headers.get("Retry-After");
+        const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : (attempt + 1) * 3000;
+        if (attempt < MAX_RETRIES) {
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          continue;
+        }
+        return []; // 超过重试次数，降级到空结果
+      }
+      if (response.ok) {
+        const data = await response.json() as { items: Array<{ full_name: string; stargazers_count: number; description: string; html_url: string }> };
+        if (data.items && data.items.length > 0) {
+          return data.items.map(repo => ({
+            id: generateId(),
+            keyword,
+            title: `${repo.full_name} (⭐ ${repo.stargazers_count})`,
+            url: repo.html_url,
+            source: "GitHub",
+            timestamp: new Date().toISOString(),
+            snippet: repo.description || "无描述",
+          }));
+        }
+      }
+      break; // 其他状态码不再重试
+    } catch {
+      if (attempt === MAX_RETRIES) break;
+    }
+  }
+  return [];
 }
 
 // 关键词 Schema
@@ -229,9 +254,11 @@ export default definePluginEntry({
             allAlerts.push(...alerts);
           }
 
-          // 追加到历史
+          // 追加到历史（按 url 去重）
           const existingAlerts = await readJson<Alert[]>(getAlertsPath(dataDir), []);
-          const newAlerts = [...allAlerts, ...existingAlerts].slice(0, 500); // 最多保留500条
+          const seenUrls = new Set(existingAlerts.map(a => a.url));
+          const uniqueNew = allAlerts.filter(a => !seenUrls.has(a.url));
+          const newAlerts = [...uniqueNew, ...existingAlerts].slice(0, 500); // 最多保留500条
           await writeJson(getAlertsPath(dataDir), newAlerts);
 
           const summary = allAlerts

@@ -7,63 +7,98 @@ import { Type } from "@sinclair/typebox";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
-
+// 数据目录
 function getDataDir(config) {
-    const dir = (config?.dataDir || process.env.TREND_MONITOR_DIR || "~/.trend-monitor").replace("~", os.homedir());
-    return dir;
+    const dir = config?.dataDir || process.env.TREND_MONITOR_DIR || "~/.trend-monitor";
+    return dir.replace("~", os.homedir());
 }
-
+// 确保目录存在
 async function ensureDir(dir) {
     try {
         await fs.mkdir(dir, { recursive: true });
     }
     catch { /* 已存在 */ }
 }
-
+// 生成 ID
 function generateId() {
-    return `alert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    return `alert-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
-
-function getAlertsPath(dataDir) { return path.join(dataDir, "alerts.json"); }
-function getKeywordsPath(dataDir) { return path.join(dataDir, "keywords.json"); }
-
+// 获取文件路径
+function getAlertsPath(dataDir) {
+    return path.join(dataDir, "alerts.json");
+}
+function getKeywordsPath(dataDir) {
+    return path.join(dataDir, "keywords.json");
+}
+// 读取 JSON
 async function readJson(filepath, defaultValue) {
     try {
         const content = await fs.readFile(filepath, "utf-8");
         return JSON.parse(content);
     }
-    catch { return defaultValue; }
+    catch {
+        return defaultValue;
+    }
 }
-
+// 保存 JSON（原子写入：先写临时文件再 rename，防止崩溃损坏数据）
 async function writeJson(filepath, data) {
-    await fs.writeFile(filepath, JSON.stringify(data, null, 2), "utf-8");
+    const tmp = filepath + ".tmp";
+    await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf-8");
+    await fs.rename(tmp, filepath);
 }
-
+// 搜索关键词（GitHub API，支持限速重试）
 async function searchKeyword(keyword) {
-    // 模拟数据 - 实际使用应接入真实搜索API
-    return [{
-        id: generateId(),
-        keyword,
-        title: `关于「${keyword}」的最新动态`,
-        url: `https://example.com/search?q=${encodeURIComponent(keyword)}`,
-        source: "搜索引擎",
-        timestamp: new Date().toISOString(),
-        snippet: `检测到「${keyword}」的相关最新资讯...`,
-    }];
+    const MAX_RETRIES = 2;
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        try {
+            const url = `https://api.github.com/search/repositories?q=${encodeURIComponent(keyword)}&sort=stars&per_page=3`;
+            const response = await fetch(url, {
+                headers: { "User-Agent": "trend-monitor-plugin/1.0" },
+            });
+            if (response.status === 403 || response.status === 429) {
+                const retryAfter = response.headers.get("Retry-After");
+                const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : (attempt + 1) * 3000;
+                if (attempt < MAX_RETRIES) {
+                    await new Promise(resolve => setTimeout(resolve, waitMs));
+                    continue;
+                }
+                return []; // 超过重试次数，降级到空结果
+            }
+            if (response.ok) {
+                const data = await response.json();
+                if (data.items && data.items.length > 0) {
+                    return data.items.map(repo => ({
+                        id: generateId(),
+                        keyword,
+                        title: `${repo.full_name} (⭐ ${repo.stargazers_count})`,
+                        url: repo.html_url,
+                        source: "GitHub",
+                        timestamp: new Date().toISOString(),
+                        snippet: repo.description || "无描述",
+                    }));
+                }
+            }
+            break; // 其他状态码不再重试
+        }
+        catch {
+            if (attempt === MAX_RETRIES)
+                break;
+        }
+    }
+    return [];
 }
-
+// 关键词 Schema
 const KeywordSchema = Type.Object({
     keyword: Type.String(),
     sources: Type.Optional(Type.Array(Type.String())),
 });
-
+// 插件入口
 export default definePluginEntry({
     id: "trend-monitor",
     name: "Trend Monitor",
     description: "追踪关键词热度、监控竞争对手、发现行业机会",
     register(api) {
         const config = api.pluginConfig;
-
         // 添加监控关键词
         api.registerTool({
             name: "trend_add_keyword",
@@ -87,22 +122,28 @@ export default definePluginEntry({
                     keywords.push(params.keyword);
                     await writeJson(getKeywordsPath(dataDir), keywords);
                     return {
-                        content: [{
+                        content: [
+                            {
                                 type: "text",
                                 text: `✅ 已添加监控关键词\n\n🔍 「${params.keyword}」\n数据目录: ${dataDir}`,
-                            }],
+                            },
+                        ],
                         details: { keyword: params.keyword, count: keywords.length },
                     };
                 }
                 catch (error) {
                     return {
-                        content: [{ type: "text", text: `❌ 添加失败: ${error instanceof Error ? error.message : String(error)}` }],
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 添加失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
                         details: { error: true },
                     };
                 }
             },
         }, { optional: true });
-
         // 查看监控列表
         api.registerTool({
             name: "trend_list_keywords",
@@ -122,22 +163,28 @@ export default definePluginEntry({
                     }
                     const list = keywords.map((k, i) => `${i + 1}. ${k}`).join("\n");
                     return {
-                        content: [{
+                        content: [
+                            {
                                 type: "text",
                                 text: `📋 当前监控 ${keywords.length} 个关键词\n\n${list}`,
-                            }],
+                            },
+                        ],
                         details: { count: keywords.length, keywords },
                     };
                 }
                 catch (error) {
                     return {
-                        content: [{ type: "text", text: `❌ 获取列表失败: ${error instanceof Error ? error.message : String(error)}` }],
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 获取列表失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
                         details: { error: true },
                     };
                 }
             },
         }, { optional: true });
-
         // 刷新监控数据
         api.registerTool({
             name: "trend_refresh",
@@ -163,29 +210,38 @@ export default definePluginEntry({
                         const alerts = await searchKeyword(kw);
                         allAlerts.push(...alerts);
                     }
+                    // 追加到历史（按 url 去重）
                     const existingAlerts = await readJson(getAlertsPath(dataDir), []);
-                    const newAlerts = [...allAlerts, ...existingAlerts].slice(0, 500);
+                    const seenUrls = new Set(existingAlerts.map(a => a.url));
+                    const uniqueNew = allAlerts.filter(a => !seenUrls.has(a.url));
+                    const newAlerts = [...uniqueNew, ...existingAlerts].slice(0, 500); // 最多保留500条
                     await writeJson(getAlertsPath(dataDir), newAlerts);
                     const summary = allAlerts
                         .map(a => `• **${a.title}**\n  来源: ${a.source} | ${a.keyword}`)
                         .join("\n");
                     return {
-                        content: [{
+                        content: [
+                            {
                                 type: "text",
                                 text: `🔄 刷新完成\n\n本次获取 ${allAlerts.length} 条新动态\n\n最新动态:\n${summary || "（暂无）"}`,
-                            }],
+                            },
+                        ],
                         details: { count: allAlerts.length, alerts: allAlerts },
                     };
                 }
                 catch (error) {
                     return {
-                        content: [{ type: "text", text: `❌ 刷新失败: ${error instanceof Error ? error.message : String(error)}` }],
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 刷新失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
                         details: { error: true },
                     };
                 }
             },
         }, { optional: true });
-
         // 查看告警历史
         api.registerTool({
             name: "trend_alerts",
@@ -214,22 +270,28 @@ export default definePluginEntry({
                         .map((a, i) => `${i + 1}. **${a.keyword}**: ${a.title}\n   ${a.url}`)
                         .join("\n\n");
                     return {
-                        content: [{
+                        content: [
+                            {
                                 type: "text",
                                 text: `📊 最近 ${alerts.length} 条告警\n\n${list}`,
-                            }],
+                            },
+                        ],
                         details: { count: alerts.length, alerts },
                     };
                 }
                 catch (error) {
                     return {
-                        content: [{ type: "text", text: `❌ 获取告警失败: ${error instanceof Error ? error.message : String(error)}` }],
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 获取告警失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
                         details: { error: true },
                     };
                 }
             },
         }, { optional: true });
-
         // 删除关键词
         api.registerTool({
             name: "trend_remove_keyword",
@@ -252,16 +314,23 @@ export default definePluginEntry({
                     }
                     await writeJson(getKeywordsPath(dataDir), filtered);
                     return {
-                        content: [{
+                        content: [
+                            {
                                 type: "text",
                                 text: `✅ 已删除「${params.keyword}」\n\n剩余 ${filtered.length} 个关键词`,
-                            }],
+                            },
+                        ],
                         details: { keyword: params.keyword, remaining: filtered.length },
                     };
                 }
                 catch (error) {
                     return {
-                        content: [{ type: "text", text: `❌ 删除失败: ${error instanceof Error ? error.message : String(error)}` }],
+                        content: [
+                            {
+                                type: "text",
+                                text: `❌ 删除失败: ${error instanceof Error ? error.message : String(error)}`,
+                            },
+                        ],
                         details: { error: true },
                     };
                 }
@@ -269,3 +338,4 @@ export default definePluginEntry({
         }, { optional: true });
     },
 });
+//# sourceMappingURL=index.js.map
